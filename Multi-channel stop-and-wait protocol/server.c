@@ -1,15 +1,4 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <errno.h> 
-
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/time.h> //FD_SET, FD_ISSET, FD_ZERO macros 
-
-#include "utilsDef.h"
+#include "packet.h"
 
 
 packetNode* makeAckPacket(int seqN){
@@ -25,47 +14,51 @@ FILE* fp;   // FILE Pointer to output file
 int packetsReceived=0;  // Same work as SeqN
 packetNode buffer[BUFFERSIZE];
 int bufferChannel[BUFFERSIZE];
+int channelArray[BUFFERSIZE];
 int bufLen = 0;
 
 void addBufferedData(){
     for(int i=0;i<bufLen;i++){
         if(buffer[i].seqN == packetsReceived+1){
-            printf("Got Packet SeqN = %d from buffer %d\n",buffer[i].seqN,buffer[i].channel);
-            printf("Adding Data to Output File from buffer : %s\n",buffer[i].data);
-            fwrite(buffer[i].data , 1 , 100 , fp);
+            // printf("Got Packet SeqN = %d from buffer %d\n",buffer[i].seqN,buffer[i].channel);
+            // printf("Adding Data to Output File from buffer : %s\n",buffer[i].data);
+            fwrite(buffer[i].data , 1 , buffer[i].size , fp);
             packetNode* ackPacket = makeAckPacket(buffer[i].seqN);
             send(bufferChannel[i],ackPacket,sizeof(packetNode),0);
+            printf("SENT ACK : for PKT with Seq. No %d from channel %d\n",ackPacket->seqN,channelArray[i]);
             packetsReceived++;
         }
     }
 }
 
-int addToBufferOrOutput(packetNode* bufPacket,int sockNum){
+int addToBufferOrOutput(packetNode* bufPacket,int sockNum,int channel){
 
-    printf("Got Packet SeqN = %d from channel %d\n",bufPacket->seqN,bufPacket->channel);
+    // printf("Got Packet SeqN = %d from channel %d\n",bufPacket->seqN,bufPacket->channel);
 
     if(packetsReceived+1==bufPacket->seqN){
             // Correct Sequence
             // printf("Adding Data to Output File : %s\n",bufPacket->data);
-            fwrite(bufPacket->data , 1 , 100 , fp);
+            fwrite(bufPacket->data , 1 , bufPacket->size , fp);
             packetsReceived++;
             // Send ACK Packet
             packetNode* ackPacket = makeAckPacket(bufPacket->seqN);
             send(sockNum,ackPacket,sizeof(packetNode),0);
-            printf("Ack sent for %d\n",bufPacket->seqN);
+            printf("SENT ACK : for PKT with Seq. No %d from channel %d\n",ackPacket->seqN,channel);
+            // printf("Ack sent for %d\n",bufPacket->seqN);
 
             addBufferedData();
             return 1;
     }
 
     if(bufLen<BUFFERSIZE){
-        printf("Adding to Buffer SeqN=%d from channel %d\n",bufPacket->seqN,bufPacket->channel);
+        // printf("Adding to Buffer SeqN=%d from channel %d\n",bufPacket->seqN,bufPacket->channel);
         bufferChannel[bufLen] = sockNum;
+        channelArray[bufLen] = channel;
         buffer[bufLen++] = *bufPacket;
         return bufLen;
     }
     else{
-        printf("Buffer is FULL\n\n");
+        // printf("Buffer is FULL\n\n");
         return -1;
     }
 }
@@ -75,7 +68,7 @@ bool dropPacket(){
     // return false;    // Uncomment to avoid dropping packets!
     
     int probDrop = rand()%100;
-    printf("probDrop : %d\n",probDrop);
+    // printf("probDrop : %d\n",probDrop);
 
     if(probDrop<PDR){
         return true;
@@ -88,7 +81,7 @@ int main(){
 
     srand(time(NULL)); 
 
-    int master_socket , addrlen , new_socket , client_socket[30];
+    int master_socket , addrlen , new_socket , client_socket[2];
     int max_sd,max_channels,sd;
     int activity;
 
@@ -197,7 +190,10 @@ int main(){
 
             if(FD_ISSET(sd,&readfds)){
                 packetNode tempPacket;
+
+
                 int bytesRecvd = recv (sd,&tempPacket, sizeof(packetNode), 0);    
+                printf("RCVD PKT : for PKT with Seq. No. %d from channel %d\n",tempPacket.seqN,i+1);
                 // int bytesRecvd = recvfrom(sd, &tempPacket, sizeof(packetNode), 0, (struct sockaddr *)&address,(socklen_t*)&addrlen);
                 
                 // printf("Check1 : %d\n",bytesRecvd);
@@ -212,9 +208,10 @@ int main(){
 
                 if(dropPacket()){
                     // Packet Dropped
-                    printf("Packet %d dropped!\n\n",tempPacket.seqN);
+                    printf("PKT: Seq No. %d dropped!\n\n",tempPacket.seqN);
                 }else{
-                    addToBufferOrOutput(&tempPacket,sd);
+                    int channel = i+1;
+                    addToBufferOrOutput(&tempPacket,sd,channel);
                     // Send ACK Packet
                     // packetNode* ackPacket = makeAckPacket(tempPacket.seqN);
                     // if(send(sd,ackPacket,sizeof(packetNode),0)!=sizeof(packetNode)){
@@ -227,7 +224,9 @@ int main(){
                     if(packetsReceived==tempPacket.seqN){
                         // Next packet to be received is the last then!
                         // All Packets are read!
+                        printf("\nFile Transfer Complete\n");
                         close(sd);
+                        close(master_socket);
                         exit(1);   
                     }
                 }
@@ -238,5 +237,6 @@ int main(){
 
     }
 
+    printf("\nFile Transfer Complete\n");
     close(master_socket);
 }   
